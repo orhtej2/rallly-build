@@ -95,7 +95,7 @@ jobs:
             tar -C "dist/$architecture" -czf "$artifact" app
 
       - name: Upload architecture artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rallly-web-${{ matrix.architecture }}
           path: ${{ inputs.artifact_prefix }}-${{ matrix.architecture }}.tar.gz
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download architecture artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: rallly-web-*
           merge-multiple: true
