@@ -74,21 +74,6 @@ jobs:
           fetch-depth: 0
           path: source
 
-      - name: Set up Node
-        if: steps.existing.outputs.skip_build == 'false'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Enable pnpm
-        if: steps.existing.outputs.skip_build == 'false'
-        run: corepack enable
-
-      - name: Install dependencies
-        if: steps.existing.outputs.skip_build == 'false'
-        working-directory: source
-        run: pnpm install --frozen-lockfile
-
       - name: Build image using the Docker recipe
         if: steps.existing.outputs.skip_build == 'false'
         working-directory: source
