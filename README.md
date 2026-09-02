@@ -1,0 +1,1 @@
+Automatic builds of [Rally](https://github.com/lukevella/rallly), tarball format.
