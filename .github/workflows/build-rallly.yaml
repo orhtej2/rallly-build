@@ -34,14 +34,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          release_json=$(gh api "repos/${{ inputs.target_repo }}/releases/tags/${{ inputs.tag }}" || true)
+          release_url="https://api.github.com/repos/${{ inputs.target_repo }}/releases/tags/${{ inputs.tag }}"
+          release_status=$(curl --silent --output /dev/null --write-out '%{http_code}' "$release_url")
 
-          if [ -z "$release_json" ] || [ "$release_json" = "null" ]; then
+          if [ "$release_status" = "404" ]; then
             echo "release_exists=false" >> "$GITHUB_OUTPUT"
             echo "skip_build=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
+          if [ "$release_status" != "200" ]; then
+            echo "Unable to check target release: HTTP $release_status" >&2
+            exit 1
+          fi
+
+          release_json=$(gh api "repos/${{ inputs.target_repo }}/releases/tags/${{ inputs.tag }}")
           release_id=$(echo "$release_json" | jq -r '.id')
           echo "release_exists=true" >> "$GITHUB_OUTPUT"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
