@@ -25,8 +25,11 @@ permissions:
   contents: write
 
 jobs:
-  build-and-upload:
+  check-release:
     runs-on: ubuntu-latest
+    outputs:
+      release_exists: ${{ steps.existing.outputs.release_exists }}
+      skip_build: ${{ steps.existing.outputs.skip_build }}
     steps:
       - name: Check whether the release already has both artifacts
         id: existing
@@ -64,28 +67,53 @@ jobs:
             echo "skip_build=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Export published Docker image artifacts
-        if: steps.existing.outputs.skip_build == 'false'
+  export-artifact:
+    needs: check-release
+    if: needs.check-release.outputs.skip_build == 'false'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        architecture: [amd64, arm64]
+    steps:
+      - name: Export published Docker image artifact
         run: |
           set -euo pipefail
           image_tag="${{ inputs.tag }}"
           image_tag="${image_tag#v}"
+          architecture="${{ matrix.architecture }}"
+          image="lukevella/rallly:$image_tag"
+          container="rallly-$architecture"
+          artifact="${{ inputs.artifact_prefix }}-$architecture.tar.gz"
 
-          for architecture in amd64 arm64; do
-            image="lukevella/rallly:$image_tag"
-            container="rallly-$architecture"
-            artifact="${{ inputs.artifact_prefix }}-$architecture.tar.gz"
+          docker pull --platform "linux/$architecture" "$image"
+          docker create --name "$container" "$image"
+            mkdir -p "dist/$architecture/app"
+            docker cp "$container:/app/." "dist/$architecture/app"
+          docker rm "$container"
+            tar -C "dist/$architecture" -czf "$artifact" app
 
-            docker pull --platform "linux/$architecture" "$image"
-            docker create --name "$container" "$image"
-            mkdir -p "dist/$architecture"
-            docker cp "$container:/app/." "dist/$architecture"
-            docker rm "$container"
-            tar -C "dist/$architecture" -czf "$artifact" .
-          done
+      - name: Upload architecture artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rallly-web-${{ matrix.architecture }}
+          path: ${{ inputs.artifact_prefix }}-${{ matrix.architecture }}.tar.gz
+          if-no-files-found: error
+
+  publish-release:
+    needs: [check-release, export-artifact]
+    if: needs.check-release.outputs.skip_build == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download architecture artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rallly-web-*
+          merge-multiple: true
 
       - name: Create target release if missing
-        if: steps.existing.outputs.skip_build == 'false' && steps.existing.outputs.release_exists == 'false'
+        if: needs.check-release.outputs.release_exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -94,8 +122,7 @@ jobs:
             --title "${{ inputs.tag }}" \
             --notes "Automated release artifact for [${{ inputs.tag }}](https://github.com/${{ inputs.source_repo }}/releases/tag/${{ inputs.tag }})."
 
-      - name: Upload artifact to release
-        if: steps.existing.outputs.skip_build == 'false'
+      - name: Upload architecture artifacts to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
