@@ -1,0 +1,124 @@
+name: Build release artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repo:
+        description: Repository to fetch source from, e.g. lukevella/rallly
+        required: true
+        type: string
+      target_repo:
+        description: Repository that owns the release to upload to, e.g. my-org/release-host
+        required: true
+        type: string
+      tag:
+        description: Release tag to build/upload
+        required: true
+        type: string
+      artifact_name:
+        description: Release asset name to publish
+        required: false
+        default: rallly-web-release.tar.gz
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check whether the release already has the artifact
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json=$(gh api "repos/${{ inputs.target_repo }}/releases/tags/${{ inputs.tag }}" || true)
+
+          if [ -z "$release_json" ] || [ "$release_json" = "null" ]; then
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+            echo "skip_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          release_id=$(echo "$release_json" | jq -r '.id')
+          echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
+
+          asset_id=$(
+            gh api "repos/${{ inputs.target_repo }}/releases/$release_id/assets" \
+              --jq '.[] | select(.name == "${{ inputs.artifact_name }}") | .id' \
+            | head -n 1
+          )
+
+          if [ -n "${asset_id:-}" ]; then
+            echo "skip_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout source repo at tag
+        if: steps.existing.outputs.skip_build == 'false'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.source_repo }}
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          path: source
+
+      - name: Set up Node
+        if: steps.existing.outputs.skip_build == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        if: steps.existing.outputs.skip_build == 'false'
+        run: corepack enable
+
+      - name: Install dependencies
+        if: steps.existing.outputs.skip_build == 'false'
+        working-directory: source
+        run: pnpm install --frozen-lockfile
+
+      - name: Build image using the Docker recipe
+        if: steps.existing.outputs.skip_build == 'false'
+        working-directory: source
+        run: |
+          docker build \
+            --build-arg APP_VERSION="${{ inputs.tag }}" \
+            --build-arg SELF_HOSTED=true \
+            -f apps/web/Dockerfile \
+            -t release-build:${{ inputs.tag }} \
+            .
+
+      - name: Export build artifact
+        if: steps.existing.outputs.skip_build == 'false'
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cid=$(docker create release-build:${{ inputs.tag }})
+          mkdir -p ../dist
+          docker cp "$cid:/app" ../dist/app
+          docker rm "$cid"
+          tar -C ../dist -czf "../${{ inputs.artifact_name }}" app
+
+      - name: Create target release if missing
+        if: steps.existing.outputs.skip_build == 'false' && steps.existing.outputs.release_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ inputs.target_repo }}" \
+            --title "${{ inputs.tag }}" \
+            --notes "Automated release artifact for [${{ inputs.tag }}](https://github.com/${{ inputs.source_repo }}/releases/tag/${{ inputs.tag }})."
+
+      - name: Upload artifact to release
+        if: steps.existing.outputs.skip_build == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.tag }}" "../${{ inputs.artifact_name }}" \
+            --repo "${{ inputs.target_repo }}" \
+            --clobber
