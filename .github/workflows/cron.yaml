@@ -1,4 +1,4 @@
-name: Build new Rallly releases
+name: Check for new Rallly releases
 
 on:
   schedule:
